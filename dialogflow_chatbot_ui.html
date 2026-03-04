@@ -1,0 +1,170 @@
+<!--
+Simple Chatbot UI (Dialogflow)
+Filename: dialogflow_chatbot_ui.html
+
+How to use:
+1. Save this file and open in a browser (or serve from your web server).
+2. The UI expects a POST endpoint at /detect_intent that accepts JSON:
+   { "message": "user message", "session_id": "optional-session-id" }
+   and returns JSON: { "reply": "bot reply text" }
+3. Modify the `API_ENDPOINT` constant below if your backend uses a different URL.
+
+If you want, I can also provide the minimal Flask backend code that accepts this request and calls the Dialogflow Python client.
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hospital Chatbot</title>
+  <style>
+    :root{--bg:#f3f6fb;--card:#ffffff;--accent:#0b6ef6;--muted:#65748b}
+    *{box-sizing:border-box}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);margin:0;display:flex;align-items:center;justify-content:center;height:100vh}
+    .chat-wrap{width:100%;max-width:760px;height:80vh;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(10,20,50,.08)}
+    header{background:linear-gradient(90deg,var(--accent),#3aa0ff);padding:16px;color:white;display:flex;align-items:center;gap:12px}
+    header h1{font-size:18px;margin:0}
+    header p{margin:0;font-size:13px;opacity:.95}
+
+    .messages{flex:1;padding:20px;overflow:auto;background-image:linear-gradient(180deg,rgba(255,255,255,.6),transparent)}
+    .msg{max-width:78%;margin-bottom:12px;padding:10px 14px;border-radius:12px;line-height:1.4}
+    .msg.user{margin-left:auto;background:#e6f0ff;color:#07214a;border-bottom-right-radius:4px}
+    .msg.bot{margin-right:auto;background:var(--card);color:#102030;border:1px solid rgba(10,20,40,.04)}
+    .meta{font-size:11px;color:var(--muted);margin-top:6px}
+
+    .composer{display:flex;padding:12px;background:linear-gradient(180deg,#fff,#f7fbff);gap:8px;border-top:1px solid rgba(10,20,40,.04)}
+    textarea{flex:1;min-height:44px;max-height:120px;padding:10px;border-radius:10px;border:1px solid rgba(10,20,40,.06);resize:none;font-size:14px}
+    button{background:var(--accent);color:white;border:none;padding:10px 16px;border-radius:10px;font-weight:600;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+
+    .small{font-size:13px;color:var(--muted);padding:10px 16px;text-align:center}
+
+    /* typing indicator */
+    .typing{display:inline-block;height:12px;vertical-align:middle}
+    .dot{display:inline-block;width:6px;height:6px;margin:0 2px;border-radius:50%;background:#c7d7ff;animation:blink 1s infinite}
+    .dot:nth-child(2){animation-delay:.15s}
+    .dot:nth-child(3){animation-delay:.3s}
+    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+
+    @media (max-width:520px){.chat-wrap{height:92vh;border-radius:8px}}
+  </style>
+</head>
+<body>
+  <div class="chat-wrap" role="application" aria-label="Hospital chatbot">
+    <header>
+      <div style="display:flex;flex-direction:column">
+        <h1>Hospital Bot</h1>
+        <p>Ask about symptoms, doctors, appointments — type below.</p>
+      </div>
+    </header>
+
+    <div id="messages" class="messages" aria-live="polite"></div>
+
+    <div id="small-info" class="small">This UI sends messages to your backend endpoint.</div>
+
+    <div class="composer">
+      <textarea id="input" placeholder="Type your message... (press Enter to send)" aria-label="Message input"></textarea>
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+<script>
+// --- CONFIG ---
+const API_ENDPOINT = '/detect_intent'; // change to your backend endpoint
+const SESSION_ID = 'web-session-' + Math.random().toString(36).slice(2,9);
+
+// --- UI helpers ---
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('sendBtn');
+
+function appendMessage(text, who='bot', meta=''){
+  const div = document.createElement('div');
+  div.className = 'msg ' + (who === 'user' ? 'user' : 'bot');
+  div.innerHTML = `<div>${escapeHtml(text)}</div>${meta?`<div class="meta">${escapeHtml(meta)}</div>`:''}`;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function setTyping(on){
+  let el = document.getElementById('typing-indicator');
+  if(on){
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'typing-indicator';
+      el.className = 'msg bot';
+      el.innerHTML = `<div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
+      messagesEl.appendChild(el);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  } else {
+    if(el) el.remove();
+  }
+}
+
+function escapeHtml(unsafe){
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// --- network ---
+async function sendMessageToBackend(message){
+  const payload = { message, session_id: SESSION_ID };
+  try{
+    setTyping(true);
+    const resp = await fetch(API_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    setTyping(false);
+    if(!resp.ok) {
+      const text = await resp.text();
+      return { error: `Server error: ${resp.status} ${text}` };
+    }
+    const data = await resp.json();
+    return data; // expected { reply: '...' }
+  }catch(err){
+    setTyping(false);
+    return { error: err.message };
+  }
+}
+
+// --- events ---
+sendBtn.addEventListener('click', async ()=>{
+  const text = inputEl.value.trim();
+  if(!text) return;
+  inputEl.value = '';
+  appendMessage(text, 'user');
+  sendBtn.disabled = true;
+  const res = await sendMessageToBackend(text);
+  sendBtn.disabled = false;
+  if(res.error){
+    appendMessage('Sorry, there was an error: ' + res.error, 'bot');
+  } else if(res.reply){
+    appendMessage(res.reply, 'bot');
+  } else if(res.fulfillmentText){
+    // some backends return Dialogflow's query_result.fulfillment_text
+    appendMessage(res.fulfillmentText || res.reply, 'bot');
+  } else {
+    appendMessage('No reply from server.', 'bot');
+  }
+});
+
+inputEl.addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    sendBtn.click();
+  }
+});
+
+// sample greeting
+appendMessage('Hello! I am the hospital assistant. Describe your symptoms or ask about appointments.');
+</script>
+</body>
+</html>
